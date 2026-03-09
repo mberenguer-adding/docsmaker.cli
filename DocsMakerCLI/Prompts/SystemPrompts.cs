@@ -2,7 +2,7 @@ namespace DocsMakerCLI.Prompts;
 
 public static class SystemPrompts
 {
-    public static string GetMasterPrompt(string userContext, string fileTree)
+    public static string GetMasterPrompt(string userContext, string fileTree, string completionToken)
     {
         return $$"""
                  Eres un Technical Writer e Ingeniero de Software Experto.
@@ -21,7 +21,8 @@ public static class SystemPrompts
                  3. Genera la documentación agrupando conceptos con sentido lógico.
                  4. Usa la herramienta `WriteDocFile(path, content)` para ir guardando los archivos Markdown generados.
                  5. Repite el proceso hasta que consideres que la arquitectura central, APIs, modelos y utilidades principales del proyecto están documentados.
-                 6. Cuando hayas terminado con todo el proyecto, despídete con un mensaje de resumen.
+                 6. No pidas confirmación al usuario ni hagas preguntas de seguimiento.
+                 7. Cuando hayas terminado con todo el proyecto, responde únicamente con: {{completionToken}}
                  
                  ### REGLAS ESTRICTAS DE FORMATO (ASTRO STARLIGHT):
                  Debes generar contenido en formato Markdown estándar (.md), pero incorporando las siguientes características específicas de Starlight para enriquecer la UI:

@@ -3,11 +3,15 @@ using System.Text;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using DocsMakerCLI.Prompts;
+using System.ClientModel;
 
 namespace DocsMakerCli.Services;
 
 public class AiDocumentationService
 {
+    private const string CompletionToken = "DOCSMAKER_COMPLETE";
+    private const int MaxAutonomousRounds = 8;
+
     private readonly IChatClient _chatClient;
     private readonly string _projectRootPath;
     private readonly string _docsBasePath;
@@ -19,8 +23,14 @@ public class AiDocumentationService
         _projectRootPath = projectRootPath;
         _docsBasePath = Path.Combine(projectRootPath, "src", "content", "docs");
 
-        // Configuramos el cliente base
-        var openAiClient = new OpenAIClient(apiKey).GetChatClient("gpt-5.4").AsIChatClient();
+        // Configuramos timeout de red más alto para proyectos grandes (el default suele ser 100s).
+        var openAiOptions = new OpenAIClientOptions
+        {
+            NetworkTimeout = TimeSpan.FromMinutes(10)
+        };
+        var openAiClient = new OpenAIClient(new ApiKeyCredential(apiKey), openAiOptions)
+            .GetChatClient("gpt-5.4")
+            .AsIChatClient();
 
         // LA MAGIA DEL AGENTE: Usamos el Builder para que resuelva las llamadas a herramientas automáticamente
         _chatClient = new ChatClientBuilder(openAiClient)
@@ -30,9 +40,11 @@ public class AiDocumentationService
 
     public async Task GenerateDocumentationAsync(IEnumerable<string> files, string userContext)
     {
+        var projectFiles = files.ToList();
+
         // 1. Construimos el árbol de archivos como texto plano para el prompt
         var treeBuilder = new StringBuilder();
-        foreach (var file in files)
+        foreach (var file in projectFiles)
         {
             var relativePath = Path.GetRelativePath(_projectRootPath, file);
     
@@ -56,20 +68,45 @@ public class AiDocumentationService
         };
 
         // 3. Preparamos el Prompt inicial con todo el contexto
-        string systemPrompt = SystemPrompts.GetMasterPrompt(userContext, fileTree);
+        string systemPrompt = SystemPrompts.GetMasterPrompt(userContext, fileTree, CompletionToken);
         var chatMessages = new List<ChatMessage>
         {
             new(ChatRole.System, systemPrompt),
             new(ChatRole.User, "Inicia tu análisis del proyecto y genera la documentación. Puedes empezar leyendo los archivos que consideres el punto de entrada o la base de la arquitectura.")
         };
 
-        // 4. UNA ÚNICA LLAMADA AL AGENTE. 
-        // El UseFunctionInvocation() interceptará las peticiones de herramientas, ejecutará el código C#
-        // y le devolverá el resultado al LLM de forma invisible hasta que el LLM decida que ha terminado.
-        var response = await _chatClient.GetResponseAsync(chatMessages, chatOptions);
+        // 4. Ejecutamos rondas autónomas para evitar que un único mensaje "corte" la sesión en proyectos grandes.
+        var completed = false;
+        for (var round = 1; round <= MaxAutonomousRounds && !completed; round++)
+        {
+            OnProgress?.Invoke($"[blue]Ronda autónoma {round}/{MaxAutonomousRounds}[/]: analizando y generando docs...");
 
-        // Opcional: imprimir lo que dice el LLM al terminar (el mensaje de resumen)
-        Console.WriteLine($"\n[IA]: {response.Text}");
+            var response = await _chatClient.GetResponseAsync(chatMessages, chatOptions);
+            var responseText = response.Text?.Trim() ?? string.Empty;
+
+            OnProgress?.Invoke($"[blue]Ronda autónoma {round}/{MaxAutonomousRounds}[/]: respuesta recibida, evaluando si continuar...");
+            chatMessages.Add(new ChatMessage(ChatRole.Assistant, responseText));
+
+            completed = responseText.Contains(CompletionToken, StringComparison.OrdinalIgnoreCase);
+            if (completed)
+                break;
+
+            var docsCount = Directory.Exists(_docsBasePath)
+                ? Directory.GetFiles(_docsBasePath, "*.md*", SearchOption.AllDirectories).Length
+                : 0;
+
+            chatMessages.Add(new ChatMessage(
+                ChatRole.User,
+                $"Continúa automáticamente. No pidas confirmación al usuario y sigue hasta cubrir lo importante del proyecto. " +
+                $"Estado actual: {docsCount} archivos de documentación generados. " +
+                $"Cuando termines por completo, responde únicamente con {CompletionToken}."));
+        }
+
+        if (!completed)
+        {
+            OnProgress?.Invoke(
+                $"[yellow]Límite de rondas alcanzado ({MaxAutonomousRounds}).[/] Se generó documentación parcial; puedes relanzar el comando para seguir ampliándola.");
+        }
     }
 
     // --- HERRAMIENTAS PARA LA IA ---
