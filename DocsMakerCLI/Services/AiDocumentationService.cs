@@ -18,6 +18,9 @@ public class AiDocumentationService
     
     public Action<string>? OnProgress { get; set; }
 
+    public int FilesReadCount { get; private set; }
+    public int FilesWrittenCount { get; private set; }
+
     public AiDocumentationService(string apiKey, string projectRootPath)
     {
         _projectRootPath = projectRootPath;
@@ -36,6 +39,11 @@ public class AiDocumentationService
         _chatClient = new ChatClientBuilder(openAiClient)
             .UseFunctionInvocation() // Esto hace que el LLM ejecute el bucle de herramientas él solo
             .Build();
+    }
+
+    private void UpdateProgress(string detail)
+    {
+        OnProgress?.Invoke($"[blue]Leídos:[/] {FilesReadCount} | [green]Escritos:[/] {FilesWrittenCount} | {detail}");
     }
 
     public async Task GenerateDocumentationAsync(IEnumerable<string> files, string userContext)
@@ -79,12 +87,12 @@ public class AiDocumentationService
         var completed = false;
         for (var round = 1; round <= MaxAutonomousRounds && !completed; round++)
         {
-            OnProgress?.Invoke($"[blue]Ronda autónoma {round}/{MaxAutonomousRounds}[/]: analizando y generando docs...");
+            UpdateProgress($"[blue]Ronda autónoma {round}/{MaxAutonomousRounds}[/]: analizando y generando docs...");
 
             var response = await _chatClient.GetResponseAsync(chatMessages, chatOptions);
             var responseText = response.Text?.Trim() ?? string.Empty;
 
-            OnProgress?.Invoke($"[blue]Ronda autónoma {round}/{MaxAutonomousRounds}[/]: respuesta recibida, evaluando si continuar...");
+            UpdateProgress($"[blue]Ronda autónoma {round}/{MaxAutonomousRounds}[/]: respuesta recibida, evaluando si continuar...");
             chatMessages.Add(new ChatMessage(ChatRole.Assistant, responseText));
 
             completed = responseText.Contains(CompletionToken, StringComparison.OrdinalIgnoreCase);
@@ -104,7 +112,7 @@ public class AiDocumentationService
 
         if (!completed)
         {
-            OnProgress?.Invoke(
+            UpdateProgress(
                 $"[yellow]Límite de rondas alcanzado ({MaxAutonomousRounds}).[/] Se generó documentación parcial; puedes relanzar el comando para seguir ampliándola.");
         }
     }
@@ -122,15 +130,16 @@ public class AiDocumentationService
             
             if (File.Exists(normalizedTarget))
             {
+                FilesReadCount++;
                 // Podríamos imprimir por consola aquí para que el usuario vea qué está leyendo la IA
-                OnProgress?.Invoke($"[yellow]Fichero leído:[/] {relativeFilePath}");
+                UpdateProgress($"[yellow]Fichero leído:[/] {relativeFilePath}");
                 return File.ReadAllText(normalizedTarget);
             }
             return $"Error: El archivo {relativeFilePath} no existe.";
         }
         catch (Exception ex)
         {
-            OnProgress?.Invoke($"[red]Error al leer archivo:[/] {relativeFilePath} - {ex.Message}");
+            UpdateProgress($"[red]Error al leer archivo:[/] {relativeFilePath} - {ex.Message}");
             return $"Error al leer el archivo: {ex.Message}";
         }
     }
@@ -150,7 +159,8 @@ public class AiDocumentationService
             Directory.CreateDirectory(directory);
         }
 
-        OnProgress?.Invoke($"[green]Fichero guardado:[/] {relativePath}");
+        FilesWrittenCount++;
+        UpdateProgress($"[green]Fichero guardado:[/] {relativePath}");
         File.WriteAllText(fullPath, markdownContent);
     }
 }

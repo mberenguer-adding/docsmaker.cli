@@ -84,6 +84,8 @@ public class GenerateCommand : AsyncCommand<GenerateSettings>
             });
 
         AnsiConsole.MarkupLine("\n[green]¡Documentación generada con éxito de forma autónoma![/]");
+        AnsiConsole.MarkupLine($"[gray]Total ficheros leídos:[/] {aiService.FilesReadCount}");
+        AnsiConsole.MarkupLine($"[gray]Total ficheros escritos:[/] {aiService.FilesWrittenCount}");
         AnsiConsole.MarkupLine("Ejecuta [blue]npm run dev[/] en la carpeta del proyecto para previsualizar tu Starlight.");
         
         return 0;
