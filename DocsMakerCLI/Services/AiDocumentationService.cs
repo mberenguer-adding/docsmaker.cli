@@ -117,6 +117,58 @@ public class AiDocumentationService
         }
     }
 
+    public async Task UpdateDocumentationAsync(IEnumerable<string> changedFiles, IEnumerable<string> allFiles, string userContext)
+    {
+        var projectFiles = allFiles.ToList();
+        var changedFileList = changedFiles.ToList();
+
+        // 1. Árbol de archivos (Contexto general)
+        var treeBuilder = new StringBuilder();
+        foreach (var file in projectFiles)
+        {
+            var relativePath = Path.GetRelativePath(_projectRootPath, file);
+            treeBuilder.AppendLine($"- {relativePath}");
+        }
+        var fileTree = treeBuilder.ToString();
+
+        // 2. Archivos cambiados (Contexto específico)
+        var changedFilesContext = string.Join("\n", changedFileList.Select(f => Path.GetRelativePath(_projectRootPath, f)));
+
+        // 3. Documentación existente
+        var existingDocs = Directory.Exists(_docsBasePath)
+            ? string.Join("\n", Directory.GetFiles(_docsBasePath, "*.md*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(_docsBasePath, f)))
+            : "No hay documentación previa.";
+
+        // 4. Configurar herramientas y prompt
+        var writeTool = AIFunctionFactory.Create(WriteDocFile);
+        var readTool = AIFunctionFactory.Create(ReadFile);
+        
+        var chatOptions = new ChatOptions { Tools = [writeTool, readTool], Temperature = 0.2f };
+        string systemPrompt = SystemPrompts.GetUpdatePrompt(userContext, fileTree, changedFilesContext, existingDocs, CompletionToken);
+
+        var chatMessages = new List<ChatMessage>
+        {
+            new(ChatRole.System, systemPrompt),
+            new(ChatRole.User, "He detectado cambios en el código. Por favor, actualiza la documentación para reflejarlos.")
+        };
+
+        // 5. Rondas autónomas
+        var completed = false;
+        for (var round = 1; round <= MaxAutonomousRounds && !completed; round++)
+        {
+            UpdateProgress($"[blue]Ronda de actualización {round}/{MaxAutonomousRounds}[/]: analizando cambios...");
+            var response = await _chatClient.GetResponseAsync(chatMessages, chatOptions);
+            var responseText = response.Text?.Trim() ?? string.Empty;
+            chatMessages.Add(new ChatMessage(ChatRole.Assistant, responseText));
+
+            completed = responseText.Contains(CompletionToken, StringComparison.OrdinalIgnoreCase);
+            if (completed) break;
+
+            chatMessages.Add(new ChatMessage(ChatRole.User, $"Continúa con el resto de archivos pendientes. Cuando termines por completo, responde con {CompletionToken}."));
+        }
+    }
+
     // --- HERRAMIENTAS PARA LA IA ---
 
     [Description("Lee el contenido de un archivo del proyecto. Usa la ruta relativa que viste en el árbol de archivos.")]

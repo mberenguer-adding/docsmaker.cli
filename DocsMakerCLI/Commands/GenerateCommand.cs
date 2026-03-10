@@ -65,25 +65,58 @@ public class GenerateCommand : AsyncCommand<GenerateSettings>
 
         AnsiConsole.MarkupLine($"[green]¡Análisis completado![/] Se ha generado un índice con [blue]{filesToDocument.Count}[/] archivos.");
         
-        // 4. Iniciar la magia de la IA con feedback visual
+        // 4. Detectar cambios incrementales
+        var metadataService = new MetadataService(targetPath);
+        var oldMetadata = metadataService.LoadMetadata();
+        var changedFiles = metadataService.GetChangedFiles(filesToDocument, oldMetadata);
+
+        if (oldMetadata.Files.Count > 0 && changedFiles.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No se detectaron cambios en los archivos. La documentación ya está actualizada.[/]");
+            return 0;
+        }
+
+        if (changedFiles.Count > 0 && oldMetadata.Files.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[blue]Se detectaron {changedFiles.Count} archivos nuevos o modificados.[/]");
+        }
+
+        // 5. Iniciar la magia de la IA con feedback visual
         var aiService = new AiDocumentationService(apiKey, targetPath);
         
         await AnsiConsole.Status()
-            .Spinner(Spinner.Known.Dots) // Un spinner minimalista
+            .Spinner(Spinner.Known.Dots)
             .SpinnerStyle(Style.Parse("blue"))
             .StartAsync("Despertando al Agente de IA...", async ctx =>
             {
-                // Inyectamos un callback para que el servicio actualice la UI
-                aiService.OnProgress = (mensaje) => 
-                {
-                    ctx.Status(mensaje);
-                };
+                aiService.OnProgress = (mensaje) => { ctx.Status(mensaje); };
 
-                // Llamamos al servicio
-                await aiService.GenerateDocumentationAsync(filesToDocument, userContext);
+                if (oldMetadata.Files.Count == 0)
+                {
+                    // Primera vez: Generación completa
+                    await aiService.GenerateDocumentationAsync(filesToDocument, userContext);
+                }
+                else
+                {
+                    // Sucesivas: Actualización incremental
+                    await aiService.UpdateDocumentationAsync(changedFiles, filesToDocument, userContext);
+                }
             });
 
-        AnsiConsole.MarkupLine("\n[green]¡Documentación generada con éxito de forma autónoma![/]");
+        // 6. Actualizar Metadatos (Hashes)
+        var newMetadata = new DocsMakerCli.Models.ProjectMetadata();
+        foreach (var file in filesToDocument)
+        {
+            newMetadata.Files.Add(new DocsMakerCli.Models.FileMetadata
+            {
+                RelativePath = Path.GetRelativePath(targetPath, file),
+                Hash = metadataService.ComputeHash(file),
+                LastModified = File.GetLastWriteTimeUtc(file)
+            });
+        }
+        metadataService.SaveMetadata(newMetadata);
+
+        AnsiConsole.MarkupLine("\n[green]¡Documentación procesada con éxito![/]");
         AnsiConsole.MarkupLine($"[gray]Total ficheros leídos:[/] {aiService.FilesReadCount}");
         AnsiConsole.MarkupLine($"[gray]Total ficheros escritos:[/] {aiService.FilesWrittenCount}");
         AnsiConsole.MarkupLine("Ejecuta [blue]npm run dev[/] en la carpeta del proyecto para previsualizar tu Starlight.");
